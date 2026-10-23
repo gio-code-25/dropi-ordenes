@@ -128,8 +128,8 @@ describe('DropiClient', () => {
 
       const orders = await client.listOrders({ from: '2026-09-01', until: '2026-10-22' })
       expect(orders).toHaveLength(1)
-      expect(orders[0].order_id).toBe(12345)
-      expect(orders[0].status).toBe('ENTREGADO')
+      expect(orders[0]!.order_id).toBe(12345)
+      expect(orders[0]!.status).toBe('ENTREGADO')
     })
 
     it('throws on invalid MCP response shape', async () => {

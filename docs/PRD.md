@@ -123,7 +123,7 @@ Etapas resultantes: PENDIENTE → PREPARANDO → EN_TRANSITO → (retroceso igno
 - RF-1.5 Para produccion se registra un redirect URI propio (el actual `http://localhost:3000/callback` solo sirve en desarrollo).
 
 ### 7.2 Polling (Fase 0)
-- RF-2.1 Cada 5 minutos, por tenant, llamar `list_orders` con `from = hoy − 45 dias`, `until = hoy`, paginando de 100 en 100.
+- RF-2.1 Cada **8 horas** (configurable por tenant, minimo 5 min), llamar `list_orders` con `from = hoy − 45 dias`, `until = hoy`, paginando de 100 en 100. Intervalo inicial conservador por volumen bajo; se ajustara cuando crezca. El panel incluye un boton "Revisar ahora" para polling manual instantaneo.
 - RF-2.2 Por cada orden: si no existe, insertarla y registrar su estatus inicial con `source = 'first_seen'`. Si existe y el estatus cambio, insertar fila en `order_status_history` y actualizar `orders`.
 - RF-2.3 Cada fila de historial guarda: estatus anterior, estatus nuevo, etapa anterior, etapa nueva, `detected_at` (hora del polling) y `dropi_updated_at` si se conoce.
 - RF-2.4 Si una orden cambio de estatus, llamar `get_order` para obtener `updated_at`, direccion y productos actualizados.
@@ -180,7 +180,7 @@ Etapas resultantes: PENDIENTE → PREPARANDO → EN_TRANSITO → (retroceso igno
 | Area | Requerimiento |
 |---|---|
 | Confiabilidad | El worker se reinicia solo si cae; un fallo no pierde cambios (la comparacion es contra el estado guardado) |
-| Latencia | Cambio de estatus detectado en ≤ 5 min; alerta al dueño en ≤ 6 min |
+| Latencia | Cambio de estatus detectado en ≤ intervalo de polling (8h default, configurable); alerta al dueño en ≤ 1 min post-deteccion; boton "Revisar ahora" para deteccion instantanea |
 | Seguridad | Secretos solo en variables de entorno; tokens OAuth cifrados en BD; RLS en todas las tablas con `tenant_id` |
 | Privacidad | Datos de clientes finales (telefono, direccion) solo visibles para su tenant; no se mandan a terceros salvo Meta y la IA cuando aplique |
 | Observabilidad | `poll_runs`, logs estructurados y una prueba diaria de salud (OAuth vigente + una lectura) que alerta si falla |
