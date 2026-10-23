@@ -269,8 +269,8 @@ Tablas nuevas (no tocar products ni stock_snapshots del scraper):
 ## Pendientes criticos
 
 - [x] **TOTP Secret de cuenta central** — obtenido, vive en `.env.local` (rotarlo: estuvo en texto plano aqui)
-- [ ] **Repo GitHub** — crear dropi-ordenes en GitHub
-- [ ] **Supabase** — crear proyecto NUEVO, separado del scraper
+- [x] **Repo GitHub** — `gio-code-25/dropi-ordenes` (privado)
+- [x] **Supabase** — proyecto `dropi-ordenes` en org n8n (ref: yowxmjmxzlbrohnvuskx, us-east-1, free)
 
 ---
 
@@ -316,7 +316,7 @@ Plantilla en `.env.example`; valores reales en `.env.local` (ignorado por git).
 
 ## GitHub
 - **Usuario:** gio-code-25
-- **Repo:** por crear (dropi-ordenes)
+- **Repo:** gio-code-25/dropi-ordenes (privado)
 
 ---
 
