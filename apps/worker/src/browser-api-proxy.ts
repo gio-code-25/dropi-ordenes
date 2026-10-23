@@ -1,7 +1,7 @@
 import { createHmac } from 'crypto'
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright'
-import type { InternalOrder, InternalListResponse, GuideHistoryResponse } from '@dropi-ordenes/core'
-import { InternalListResponseSchema, GuideHistoryResponseSchema } from '@dropi-ordenes/core'
+import type { InternalOrder, InternalListResponse, GuideHistoryResponse, OrderHistoryEntry } from '@dropi-ordenes/core'
+import { InternalListResponseSchema, GuideHistoryResponseSchema, OrderDetailResponseSchema } from '@dropi-ordenes/core'
 
 interface BrowserProxyCredentials {
   email: string
@@ -221,6 +221,39 @@ export class BrowserApiProxy {
     }
 
     return parsed.data.objects
+  }
+
+  async getOrderHistory(orderId: number): Promise<OrderHistoryEntry[]> {
+    const page = await this.ensureLoggedIn()
+
+    const rawResult = await page.evaluate(
+      async (oid: number) => {
+        const jwt = localStorage.getItem('DROPI_token')?.replace(/^"|"$/g, '')
+        if (!jwt) throw new Error('No JWT in localStorage')
+
+        const res = await fetch(
+          `https://api.dropi.mx/api/orders/myorders/v2/${oid}?warranty=false`,
+          {
+            headers: {
+              'x-authorization': `Bearer ${jwt}`,
+              Accept: 'application/json',
+            },
+          },
+        )
+
+        if (!res.ok) throw new Error(`API returned ${res.status}`)
+        return res.json()
+      },
+      orderId,
+    )
+
+    const parsed = OrderDetailResponseSchema.safeParse(rawResult)
+    if (!parsed.success) {
+      this.logger.error('Order detail schema validation failed', { errors: parsed.error.issues.slice(0, 5) })
+      throw new Error('Order detail response schema mismatch')
+    }
+
+    return parsed.data.objects.history
   }
 
   async close(): Promise<void> {

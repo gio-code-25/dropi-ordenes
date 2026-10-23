@@ -1,8 +1,7 @@
 import type pg from 'pg'
 import {
   type InternalOrder,
-  type DropiMovement,
-  type GuideMovement,
+  type OrderHistoryEntry,
   applyStatus,
   type StageState,
   toE164Mx,
@@ -11,7 +10,7 @@ import {
 
 interface OrderSource {
   listAllOrders(params: { from: string; until: string; status?: string }): Promise<InternalOrder[]>
-  getGuideHistory(shippingGuide: string): Promise<{ Movimientos: GuideMovement[] }>
+  getOrderHistory(orderId: number): Promise<OrderHistoryEntry[]>
 }
 
 interface SyncResult {
@@ -120,27 +119,14 @@ async function processOrder(
     ],
   )
 
-  let guideBackfilled = false
-  if (order.shipping_guide) {
-    try {
-      const guideData = await client.getGuideHistory(order.shipping_guide)
-      const guideMoves = guideData.Movimientos ?? []
-      if (guideMoves.length > 0) {
-        const backfilled = await backfillGuideMovements(order.id, guideMoves, db, tenantId)
-        result.movementsBackfilled += backfilled
-        guideBackfilled = true
-      }
-    } catch {
-      // Guide history is best-effort — fall back to servientrega_movements
-    }
-  }
-
-  if (!guideBackfilled) {
-    const movements = order.servientrega_movements ?? []
-    if (movements.length > 0) {
-      const backfilled = await backfillMovements(order.id, movements, db, tenantId)
+  try {
+    const history = await client.getOrderHistory(order.id)
+    if (history.length > 0) {
+      const backfilled = await backfillOrderHistory(order.id, history, db, tenantId)
       result.movementsBackfilled += backfilled
     }
+  } catch {
+    // Order detail history is best-effort
   }
 
   if (row.status_raw === order.status) return
@@ -196,29 +182,15 @@ async function insertNewOrder(
   )
 
   // Backfill movement history — prefer guide history (more detailed) over servientrega_movements
-  let guideBackfilled = false
-  if (order.shipping_guide) {
-    try {
-      const guideData = await client.getGuideHistory(order.shipping_guide)
-      const guideMoves = guideData.Movimientos ?? []
-      if (guideMoves.length > 0) {
-        const backfilled = await backfillGuideMovements(order.id, guideMoves, db, tenantId)
-        result.movementsBackfilled += backfilled
-        guideBackfilled = true
-        logger.info(`Order ${order.id}: backfilled ${backfilled} guide movements`)
-      }
-    } catch {
-      // Guide history is best-effort — fall back to servientrega_movements
-    }
-  }
-
-  if (!guideBackfilled) {
-    const movements = order.servientrega_movements ?? []
-    if (movements.length > 0) {
-      const backfilled = await backfillMovements(order.id, movements, db, tenantId)
+  try {
+    const history = await client.getOrderHistory(order.id)
+    if (history.length > 0) {
+      const backfilled = await backfillOrderHistory(order.id, history, db, tenantId)
       result.movementsBackfilled += backfilled
-      logger.info(`Order ${order.id}: backfilled ${backfilled} servientrega movements`)
+      logger.info(`Order ${order.id}: backfilled ${backfilled} status history entries`)
     }
+  } catch {
+    // Order detail history is best-effort
   }
 
   result.newOrders++
@@ -267,27 +239,26 @@ async function handleStatusChange(
   result.changes++
 }
 
-async function backfillMovements(
+async function backfillOrderHistory(
   orderId: number,
-  movements: DropiMovement[],
+  history: OrderHistoryEntry[],
   db: pg.Pool,
   tenantId: string,
 ): Promise<number> {
   let count = 0
 
-  const sorted = [...movements].sort(
+  const sorted = [...history].sort(
     (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
   )
 
   for (let i = 0; i < sorted.length; i++) {
-    const mov = sorted[i]!
+    const entry = sorted[i]!
     const prev = i > 0 ? sorted[i - 1]! : null
 
-    // Skip if we already have this movement logged (idempotent by dropi_movement_id)
     const { rows: existing } = await db.query(
       `SELECT id FROM order_status_history
        WHERE tenant_id = $1 AND order_id = $2 AND dropi_movement_id = $3`,
-      [tenantId, orderId, mov.id],
+      [tenantId, orderId, entry.id],
     )
     if (existing.length > 0) continue
 
@@ -295,46 +266,8 @@ async function backfillMovements(
       `INSERT INTO order_status_history (
         tenant_id, order_id, prev_status, new_status, prev_stage, new_stage,
         detected_at, dropi_timestamp, dropi_movement_id, source
-      ) VALUES ($1,$2,$3,$4,NULL,NULL,$5,$5,$6,'dropi_movement')`,
-      [tenantId, orderId, prev?.nom_mov ?? null, mov.nom_mov, mov.created_at, mov.id],
-    )
-    count++
-  }
-
-  return count
-}
-
-async function backfillGuideMovements(
-  orderId: number,
-  movements: GuideMovement[],
-  db: pg.Pool,
-  tenantId: string,
-): Promise<number> {
-  let count = 0
-
-  const sorted = [...movements].sort(
-    (a, b) => Number(a.FechaRegistro) - Number(b.FechaRegistro),
-  )
-
-  for (let i = 0; i < sorted.length; i++) {
-    const mov = sorted[i]!
-    const prev = i > 0 ? sorted[i - 1]! : null
-
-    const { rows: existing } = await db.query(
-      `SELECT id FROM order_status_history
-       WHERE tenant_id = $1 AND order_id = $2 AND dropi_movement_id = $3`,
-      [tenantId, orderId, mov.BitacoraGuiaId],
-    )
-    if (existing.length > 0) continue
-
-    const timestamp = new Date(Number(mov.FechaRegistro)).toISOString()
-
-    await db.query(
-      `INSERT INTO order_status_history (
-        tenant_id, order_id, prev_status, new_status, prev_stage, new_stage,
-        detected_at, dropi_timestamp, dropi_movement_id, source
-      ) VALUES ($1,$2,$3,$4,NULL,NULL,$5,$5,$6,'guide_movement')`,
-      [tenantId, orderId, prev?.estatusnuevoname ?? null, mov.estatusnuevoname, timestamp, mov.BitacoraGuiaId],
+      ) VALUES ($1,$2,$3,$4,NULL,NULL,$5,$5,$6,'dropi_status')`,
+      [tenantId, orderId, prev?.status ?? null, entry.status, entry.created_at, entry.id],
     )
     count++
   }

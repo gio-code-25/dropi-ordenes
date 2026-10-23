@@ -44,8 +44,25 @@ export async function getOrder(orderId: string): Promise<Order | null> {
 
 export async function getOrderHistory(orderId: string): Promise<StatusHistoryEntry[]> {
   const { rows } = await pool.query<StatusHistoryEntry>(
-    `SELECT * FROM order_status_history
-     WHERE tenant_id = $1 AND order_id = $2
+    `SELECT * FROM (
+       WITH has_dropi AS (
+         SELECT EXISTS (
+           SELECT 1 FROM order_status_history
+           WHERE tenant_id = $1 AND order_id = $2 AND source = 'dropi_status'
+         ) AS yes
+       ),
+       deduped AS (
+         SELECT DISTINCT ON (UPPER(new_status)) *
+         FROM order_status_history
+         WHERE tenant_id = $1 AND order_id = $2 AND source = 'dropi_status'
+         ORDER BY UPPER(new_status), dropi_movement_id ASC
+       )
+       SELECT d.* FROM deduped d, has_dropi hd WHERE hd.yes
+       UNION ALL
+       SELECT h.* FROM order_status_history h, has_dropi hd
+       WHERE h.tenant_id = $1 AND h.order_id = $2
+         AND NOT hd.yes
+     ) sub
      ORDER BY COALESCE(dropi_timestamp, detected_at) ASC`,
     [TENANT, orderId],
   )

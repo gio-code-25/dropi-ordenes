@@ -130,15 +130,15 @@ export default async function OrderDetail({ params }: { params: Promise<{ id: st
                       {formatDate(h.dropi_timestamp ?? h.detected_at)}
                     </span>
                     <span className={`text-xs px-1.5 py-0.5 rounded ${
-                      h.source === 'guide_movement'
-                        ? 'bg-emerald-100 text-emerald-700'
-                        : h.source === 'dropi_movement'
-                          ? 'bg-purple-100 text-purple-700'
+                      h.source === 'dropi_status'
+                        ? 'bg-amber-100 text-amber-700'
+                        : h.source === 'guide_movement'
+                          ? 'bg-emerald-100 text-emerald-700'
                           : h.source === 'poll'
                             ? 'bg-blue-100 text-blue-700'
                             : 'bg-gray-100 text-gray-600'
                     }`}>
-                      {h.source === 'guide_movement' ? 'Transportadora' : h.source === 'dropi_movement' ? 'Movimiento' : h.source === 'poll' ? 'Poll' : 'Primera vez'}
+                      {h.source === 'dropi_status' ? 'Dropi' : h.source === 'guide_movement' ? 'Transportadora' : h.source === 'poll' ? 'Poll' : 'Primera vez'}
                     </span>
                   </div>
                 </div>

@@ -107,6 +107,31 @@ export const GuideHistoryResponseSchema = z.object({
 
 export type GuideHistoryResponse = z.infer<typeof GuideHistoryResponseSchema>
 
+export const OrderHistoryEntrySchema = z.object({
+  id: z.number(),
+  status: z.string(),
+  created_at: z.string(),
+  order_id: z.number(),
+  user_id: z.number().nullable().optional(),
+  user: z.object({
+    id: z.number(),
+    name: z.string(),
+    surname: z.string().nullable().optional(),
+  }).nullable().optional(),
+  notes: z.string().nullable().optional(),
+})
+
+export type OrderHistoryEntry = z.infer<typeof OrderHistoryEntrySchema>
+
+export const OrderDetailResponseSchema = z.object({
+  isSuccess: z.boolean(),
+  objects: InternalOrderSchema.extend({
+    history: z.array(OrderHistoryEntrySchema).optional().default([]),
+  }),
+})
+
+export type OrderDetailResponse = z.infer<typeof OrderDetailResponseSchema>
+
 export const StatusByCountrySchema = z.object({
   name: z.string(),
   id: z.number(),
