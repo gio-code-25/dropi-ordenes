@@ -2,6 +2,9 @@ import { createServer } from 'http'
 import { generatePKCE, buildAuthorizeUrl, DropiClient, type OAuthConfig } from '@dropi-ordenes/core'
 import { DbTokenStore } from './db-token-store.js'
 import { getDb } from './db.js'
+import { loadEnv } from './env.js'
+
+loadEnv()
 
 const config: OAuthConfig = {
   clientId: process.env.DROPI_OAUTH_CLIENT_ID!,

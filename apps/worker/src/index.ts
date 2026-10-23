@@ -1,17 +1,12 @@
-import { DropiClient, type OAuthConfig } from '@dropi-ordenes/core'
 import { getDb } from './db.js'
-import { DbTokenStore } from './db-token-store.js'
-import { syncOrders } from './sync-orders.js'
+import { BrowserApiProxy } from './browser-api-proxy.js'
+import { syncOrdersInternal } from './sync-orders-internal.js'
+import { loadEnv } from './env.js'
+
+loadEnv()
 
 const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_HOURS ?? 8) * 60 * 60 * 1000
-
-const config: OAuthConfig = {
-  clientId: process.env.DROPI_OAUTH_CLIENT_ID!,
-  redirectUri: process.env.DROPI_OAUTH_REDIRECT_URI ?? 'http://localhost:3000/callback',
-  authorizeUrl: process.env.DROPI_OAUTH_AUTHORIZE_URL!,
-  tokenUrl: process.env.DROPI_OAUTH_TOKEN_URL!,
-  mcpUrl: process.env.DROPI_MCP_URL!,
-}
+const DROPI_USER_ID = Number(process.env.DROPI_USER_ID ?? 40243)
 
 const logger = {
   info: (msg: string, data?: Record<string, unknown>) =>
@@ -22,15 +17,22 @@ const logger = {
     console.error(JSON.stringify({ level: 'error', msg, ...data, ts: new Date().toISOString() })),
 }
 
+const proxy = new BrowserApiProxy(
+  {
+    email: process.env.DROPI_EMAIL!,
+    password: process.env.DROPI_PASSWORD!,
+    totpSecret: process.env.DROPI_TOTP_SECRET!,
+  },
+  { userId: DROPI_USER_ID, headless: true },
+  { info: (m) => logger.info(m), error: (m, d) => logger.error(m, { detail: d }) },
+)
+
 async function runPollCycle(tenantId: string): Promise<void> {
   const db = getDb()
-  const store = new DbTokenStore(db, tenantId)
-  const client = new DropiClient(config, store, logger)
 
-  const { rows: [run] } = await db.query(
-    `INSERT INTO poll_runs (tenant_id) VALUES ($1) RETURNING id`,
-    [tenantId],
-  )
+  const {
+    rows: [run],
+  } = await db.query(`INSERT INTO poll_runs (tenant_id) VALUES ($1) RETURNING id`, [tenantId])
 
   const startTime = Date.now()
   logger.info('Poll cycle started', { tenantId, runId: run.id })
@@ -38,31 +40,21 @@ async function runPollCycle(tenantId: string): Promise<void> {
   let result
   try {
     const syncLog = { info: (m: string) => logger.info(m), error: (m: string) => logger.error(m) }
-    result = await syncOrders(client, db, tenantId, syncLog)
+    result = await syncOrdersInternal(proxy, db, tenantId, syncLog)
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err)
     logger.error('Poll cycle failed', { tenantId, error: msg })
-    await db.query(
-      `UPDATE poll_runs SET finished_at = now(), errors = $2 WHERE id = $1`,
-      [run.id, JSON.stringify([{ error: msg }])],
-    )
+    await db.query(`UPDATE poll_runs SET finished_at = now(), errors = $2 WHERE id = $1`, [
+      run.id,
+      JSON.stringify([{ error: msg }]),
+    ])
     return
   }
 
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
   await db.query(
-    `UPDATE poll_runs SET
-      finished_at = now(),
-      orders_read = $2,
-      changes = $3,
-      errors = $4
-    WHERE id = $1`,
-    [
-      run.id,
-      result.ordersRead,
-      result.changes,
-      result.errors.length > 0 ? JSON.stringify(result.errors) : null,
-    ],
+    `UPDATE poll_runs SET finished_at = now(), orders_read = $2, changes = $3, errors = $4 WHERE id = $1`,
+    [run.id, result.ordersRead, result.changes, result.errors.length > 0 ? JSON.stringify(result.errors) : null],
   )
 
   logger.info('Poll cycle finished', {
@@ -71,6 +63,7 @@ async function runPollCycle(tenantId: string): Promise<void> {
     ordersRead: result.ordersRead,
     newOrders: result.newOrders,
     changes: result.changes,
+    movementsBackfilled: result.movementsBackfilled,
     errors: result.errors.length,
     elapsedSec: elapsed,
   })
@@ -96,10 +89,12 @@ async function pollAll(): Promise<void> {
   for (const tenantId of tenants) {
     await runPollCycle(tenantId)
   }
+
+  await proxy.close()
 }
 
 async function main(): Promise<void> {
-  logger.info('Worker started', { intervalHours: POLL_INTERVAL_MS / 3600000 })
+  logger.info('Worker started', { intervalHours: POLL_INTERVAL_MS / 3600000, userId: DROPI_USER_ID })
 
   await pollAll()
 
@@ -114,7 +109,14 @@ async function main(): Promise<void> {
   }, POLL_INTERVAL_MS)
 }
 
-main().catch((err) => {
+process.on('SIGTERM', async () => {
+  logger.info('SIGTERM received, shutting down...')
+  await proxy.close()
+  process.exit(0)
+})
+
+main().catch(async (err) => {
   logger.error('Worker crashed', { error: err instanceof Error ? err.message : String(err) })
+  await proxy.close()
   process.exit(1)
 })

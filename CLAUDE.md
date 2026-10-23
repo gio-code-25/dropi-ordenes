@@ -149,12 +149,41 @@ Body:
 Response: { isSuccess: true, objects: [...productos], count: N }
 ```
 
-#### Endpoints por descubrir para ordenes (si MCP no basta)
-El panel de ordenes en `app.dropi.mx` usa endpoints similares. Si el MCP no cubre algo (ej: historial de cambios de estatus de una orden), hay que:
-1. Abrir Chrome DevTools en app.dropi.mx
-2. Ir a la seccion de ordenes
-3. Inspeccionar Network → ver que endpoints llama
-4. Replicar con el JWT robado
+#### Ordenes (descubierto oct 2026)
+```
+GET https://api.dropi.mx/api/orders/myorders/v2
+Headers:
+  x-authorization: Bearer <JWT_TOKEN>
+  Accept: application/json
+Query params:
+  exportAs=orderByRow
+  orderBy=id&orderDirection=desc
+  result_number=100&start=0        // paginacion
+  user_id=40243                    // ID del usuario Dropi
+  from=2026-10-01&until=2026-10-22 // rango de fechas
+  status=null                      // filtro (null = todos)
+  filter_date_by=FECHA DE CREADO
+  supplier_id=false&warranty=false&seller=null&invoiced=null
+Response: { isSuccess: true, status: 200, count: N, objects: [...ordenes] }
+```
+
+**CRITICO — CORS/origin check:** Este endpoint rechaza requests (403) desde Node.js/fetch directo.
+Solo funciona cuando el fetch se hace DESDE el contexto del navegador (app.dropi.mx).
+El worker usa `BrowserApiProxy`: abre Playwright, hace login, y ejecuta fetch via `page.evaluate()`.
+
+Cada orden incluye:
+- `servientrega_movements[]`: historial completo de movimientos con timestamps
+  - `{ id, nom_mov: "ENVÍO RECOLECTADO", created_at: "2026-10-21T16:07:23" }`
+- `orderdetails[]`: productos con precio y SKU
+- `distribution_company`: transportadora con ID
+- `name` + `surname`: nombre completo del cliente (separados)
+
+#### Otros endpoints descubiertos
+```
+GET  https://api.dropi.mx/api/helpers/getStatusesByCountry?country=  → 225 estatus
+GET  https://api.dropi.mx/api/users/{userId}                        → datos del usuario
+GET  https://api.dropi.mx/api/shops/index/?user_id={userId}         → tiendas conectadas
+```
 
 ### Token JWT
 - Se guarda en localStorage con key `DROPI_token`
@@ -234,10 +263,10 @@ categories (array strings), gallery (array con urlS3), variations (array)
 - start: offset paginacion (0 = primera)
 
 ### Limitaciones del MCP (lo que NO puede hacer)
-- **No da historial de cambios de estatus** — solo el estatus actual
+- **No da historial de cambios de estatus** — solo el estatus actual → **RESUELTO**: la API interna da `servientrega_movements`
 - **No puede editar ordenes** — solo list/get/create
 - **No tiene webhooks** — hay que hacer polling
-- Para historial de estatus: usar Playwright → entrar a app.dropi.mx → abrir orden → scrapeear timeline
+- **OAuth solo funciona con IAs** (Claude, ChatGPT) — no con apps custom → Worker usa API interna via Playwright
 
 ---
 
@@ -283,8 +312,16 @@ Decidido (2026-10-23):
 - Supabase (proyecto nuevo) + pg-boss como cola. Sin Redis
 - Hosting: VPS Hetzner (Docker/Coolify). No Oracle, no Vercel
 - WhatsApp: Meta Cloud API directo (cuenta verificada)
-- v1 solo usa el MCP. Sin Playwright ni scraping. Confirmar/cancelar/editar se hace en Dropi
 - Fase 0 (validador de estatus) va antes que cualquier mensajeria
+
+Decidido (2026-10-22):
+- **MCP OAuth no sirve para apps custom** — solo funciona con AI platforms (Claude, ChatGPT)
+- **Worker usa API interna de Dropi** via Playwright headless (`BrowserApiProxy`)
+- **API interna requiere contexto de navegador** — fetch desde Node.js da 403 (CORS/origin check)
+- El worker hace login con email+password+TOTP, luego ejecuta `page.evaluate()` para API calls
+- La API interna da `servientrega_movements` = historial completo de cambios de estatus con timestamps
+- **Solo lectura** — el sistema NUNCA modifica, cancela o crea ordenes en Dropi
+- MCP se mantiene para desarrollo/testing via Claude (tools: `list_orders`, `get_order`, etc.)
 
 Pruebas: `npm test` (Vitest). Tipos: `npm run typecheck`.
 
@@ -295,7 +332,7 @@ Pruebas: `npm test` (Vitest). Tipos: `npm run typecheck`.
 | Proyecto | Proposito | Conexion |
 |---|---|---|
 | **SCRAPER DROPI** (dropi-stock-tracker) | Trackea catalogo/stock/ventas | Comparte Supabase y Oracle. NO se toca |
-| **Dropi Ordenes** (este proyecto) | Gestiona pedidos + WhatsApp | Usa MCP oficial, tablas separadas |
+| **Dropi Ordenes** (este proyecto) | Gestiona pedidos + WhatsApp | Usa API interna via Playwright, tablas separadas |
 
 **REGLA:** Nunca modificar tablas `products` ni `stock_snapshots` desde este proyecto. Son del scraper.
 
