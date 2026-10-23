@@ -118,16 +118,15 @@ async function processOrder(
     ],
   )
 
-  if (row.status_raw === order.status) return
-
-  await handleStatusChange(order, row, db, tenantId, result)
-
-  // Backfill movement history
   const movements = order.servientrega_movements ?? []
   if (movements.length > 0) {
     const backfilled = await backfillMovements(order.id, movements, db, tenantId)
     result.movementsBackfilled += backfilled
   }
+
+  if (row.status_raw === order.status) return
+
+  await handleStatusChange(order, row, db, tenantId, result)
 }
 
 async function insertNewOrder(
