@@ -93,10 +93,18 @@ async function pollAll(): Promise<void> {
   await proxy.close()
 }
 
+const ONCE = process.argv.includes('--once')
+
 async function main(): Promise<void> {
-  logger.info('Worker started', { intervalHours: POLL_INTERVAL_MS / 3600000, userId: DROPI_USER_ID })
+  logger.info('Worker started', { mode: ONCE ? 'once' : 'loop', intervalHours: POLL_INTERVAL_MS / 3600000, userId: DROPI_USER_ID })
 
   await pollAll()
+
+  if (ONCE) {
+    logger.info('Single run complete, exiting')
+    await proxy.close()
+    process.exit(0)
+  }
 
   setInterval(async () => {
     try {
