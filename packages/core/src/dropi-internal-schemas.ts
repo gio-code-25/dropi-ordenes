@@ -76,6 +76,37 @@ export const InternalListResponseSchema = z.object({
 
 export type InternalListResponse = z.infer<typeof InternalListResponseSchema>
 
+export const GuideMovementSchema = z.object({
+  FechaRegistro: z.string(),
+  estatusnuevoname: z.string(),
+  Folio: z.string(),
+  BitacoraGuiaId: z.number(),
+  EstatusNuevo: z.number(),
+  GuiaId: z.number(),
+  Comentarios: z.array(z.object({
+    text: z.string().optional(),
+    act_user: z.string().optional(),
+  }).passthrough()).optional().default([]),
+  Evidencias: z.array(z.unknown()).optional().default([]),
+})
+
+export type GuideMovement = z.infer<typeof GuideMovementSchema>
+
+export const GuideHistoryResponseSchema = z.object({
+  isSuccess: z.boolean(),
+  status: z.number().optional(),
+  objects: z.object({
+    Movimientos: z.array(GuideMovementSchema).optional().default([]),
+    Estatus: z.object({
+      Nombre: z.string(),
+      Descripcion: z.string().optional(),
+      Proceso: z.string().optional(),
+    }).optional(),
+  }),
+})
+
+export type GuideHistoryResponse = z.infer<typeof GuideHistoryResponseSchema>
+
 export const StatusByCountrySchema = z.object({
   name: z.string(),
   id: z.number(),

@@ -1,7 +1,7 @@
 import { createHmac } from 'crypto'
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright'
-import type { InternalOrder, InternalListResponse } from '@dropi-ordenes/core'
-import { InternalListResponseSchema } from '@dropi-ordenes/core'
+import type { InternalOrder, InternalListResponse, GuideHistoryResponse } from '@dropi-ordenes/core'
+import { InternalListResponseSchema, GuideHistoryResponseSchema } from '@dropi-ordenes/core'
 
 interface BrowserProxyCredentials {
   email: string
@@ -185,6 +185,39 @@ export class BrowserApiProxy {
     if (!parsed.success) {
       this.logger.error('Schema validation failed', { errors: parsed.error.issues.slice(0, 5) })
       throw new Error('API response schema mismatch')
+    }
+
+    return parsed.data.objects
+  }
+
+  async getGuideHistory(shippingGuide: string): Promise<GuideHistoryResponse['objects']> {
+    const page = await this.ensureLoggedIn()
+
+    const rawResult = await page.evaluate(
+      async (guide: string) => {
+        const jwt = localStorage.getItem('DROPI_token')?.replace(/^"|"$/g, '')
+        if (!jwt) throw new Error('No JWT in localStorage')
+
+        const res = await fetch(
+          `https://api.dropi.mx/api/orders/consultarhistoricoguia?shipping_guide=${encodeURIComponent(guide)}`,
+          {
+            headers: {
+              'x-authorization': `Bearer ${jwt}`,
+              Accept: 'application/json',
+            },
+          },
+        )
+
+        if (!res.ok) throw new Error(`API returned ${res.status}`)
+        return res.json()
+      },
+      shippingGuide,
+    )
+
+    const parsed = GuideHistoryResponseSchema.safeParse(rawResult)
+    if (!parsed.success) {
+      this.logger.error('Guide history schema validation failed', { errors: parsed.error.issues.slice(0, 5) })
+      throw new Error('Guide history response schema mismatch')
     }
 
     return parsed.data.objects

@@ -2,6 +2,7 @@ import type pg from 'pg'
 import {
   type InternalOrder,
   type DropiMovement,
+  type GuideMovement,
   applyStatus,
   type StageState,
   toE164Mx,
@@ -10,6 +11,7 @@ import {
 
 interface OrderSource {
   listAllOrders(params: { from: string; until: string; status?: string }): Promise<InternalOrder[]>
+  getGuideHistory(shippingGuide: string): Promise<{ Movimientos: GuideMovement[] }>
 }
 
 interface SyncResult {
@@ -54,7 +56,7 @@ export async function syncOrdersInternal(
 
   for (const order of orders) {
     try {
-      await processOrder(order, db, tenantId, result, logger)
+      await processOrder(order, client, db, tenantId, result, logger)
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
       logger.error(`Error processing order ${order.id}`, { error: msg })
@@ -75,13 +77,13 @@ function buildItems(o: InternalOrder): unknown[] | null {
   return o.orderdetails.map((d) => ({
     product_id: d.product_id,
     product_name: d.product?.name ?? null,
-    unit_price: d.product?.sale_price ?? null,
     variation_id: d.variation_id,
   }))
 }
 
 async function processOrder(
   order: InternalOrder,
+  client: OrderSource,
   db: pg.Pool,
   tenantId: string,
   result: SyncResult,
@@ -93,7 +95,7 @@ async function processOrder(
   )
 
   if (existing.length === 0) {
-    await insertNewOrder(order, db, tenantId, result, logger)
+    await insertNewOrder(order, client, db, tenantId, result, logger)
     return
   }
 
@@ -118,10 +120,27 @@ async function processOrder(
     ],
   )
 
-  const movements = order.servientrega_movements ?? []
-  if (movements.length > 0) {
-    const backfilled = await backfillMovements(order.id, movements, db, tenantId)
-    result.movementsBackfilled += backfilled
+  let guideBackfilled = false
+  if (order.shipping_guide) {
+    try {
+      const guideData = await client.getGuideHistory(order.shipping_guide)
+      const guideMoves = guideData.Movimientos ?? []
+      if (guideMoves.length > 0) {
+        const backfilled = await backfillGuideMovements(order.id, guideMoves, db, tenantId)
+        result.movementsBackfilled += backfilled
+        guideBackfilled = true
+      }
+    } catch {
+      // Guide history is best-effort — fall back to servientrega_movements
+    }
+  }
+
+  if (!guideBackfilled) {
+    const movements = order.servientrega_movements ?? []
+    if (movements.length > 0) {
+      const backfilled = await backfillMovements(order.id, movements, db, tenantId)
+      result.movementsBackfilled += backfilled
+    }
   }
 
   if (row.status_raw === order.status) return
@@ -131,6 +150,7 @@ async function processOrder(
 
 async function insertNewOrder(
   order: InternalOrder,
+  client: OrderSource,
   db: pg.Pool,
   tenantId: string,
   result: SyncResult,
@@ -175,12 +195,30 @@ async function insertNewOrder(
     [tenantId, order.id, order.status, update.state.stage],
   )
 
-  // Backfill full movement history from Dropi
-  const movements = order.servientrega_movements ?? []
-  if (movements.length > 0) {
-    const backfilled = await backfillMovements(order.id, movements, db, tenantId)
-    result.movementsBackfilled += backfilled
-    logger.info(`Order ${order.id}: backfilled ${backfilled} movements`)
+  // Backfill movement history — prefer guide history (more detailed) over servientrega_movements
+  let guideBackfilled = false
+  if (order.shipping_guide) {
+    try {
+      const guideData = await client.getGuideHistory(order.shipping_guide)
+      const guideMoves = guideData.Movimientos ?? []
+      if (guideMoves.length > 0) {
+        const backfilled = await backfillGuideMovements(order.id, guideMoves, db, tenantId)
+        result.movementsBackfilled += backfilled
+        guideBackfilled = true
+        logger.info(`Order ${order.id}: backfilled ${backfilled} guide movements`)
+      }
+    } catch {
+      // Guide history is best-effort — fall back to servientrega_movements
+    }
+  }
+
+  if (!guideBackfilled) {
+    const movements = order.servientrega_movements ?? []
+    if (movements.length > 0) {
+      const backfilled = await backfillMovements(order.id, movements, db, tenantId)
+      result.movementsBackfilled += backfilled
+      logger.info(`Order ${order.id}: backfilled ${backfilled} servientrega movements`)
+    }
   }
 
   result.newOrders++
@@ -259,6 +297,44 @@ async function backfillMovements(
         detected_at, dropi_timestamp, dropi_movement_id, source
       ) VALUES ($1,$2,$3,$4,NULL,NULL,$5,$5,$6,'dropi_movement')`,
       [tenantId, orderId, prev?.nom_mov ?? null, mov.nom_mov, mov.created_at, mov.id],
+    )
+    count++
+  }
+
+  return count
+}
+
+async function backfillGuideMovements(
+  orderId: number,
+  movements: GuideMovement[],
+  db: pg.Pool,
+  tenantId: string,
+): Promise<number> {
+  let count = 0
+
+  const sorted = [...movements].sort(
+    (a, b) => Number(a.FechaRegistro) - Number(b.FechaRegistro),
+  )
+
+  for (let i = 0; i < sorted.length; i++) {
+    const mov = sorted[i]!
+    const prev = i > 0 ? sorted[i - 1]! : null
+
+    const { rows: existing } = await db.query(
+      `SELECT id FROM order_status_history
+       WHERE tenant_id = $1 AND order_id = $2 AND dropi_movement_id = $3`,
+      [tenantId, orderId, mov.BitacoraGuiaId],
+    )
+    if (existing.length > 0) continue
+
+    const timestamp = new Date(Number(mov.FechaRegistro)).toISOString()
+
+    await db.query(
+      `INSERT INTO order_status_history (
+        tenant_id, order_id, prev_status, new_status, prev_stage, new_stage,
+        detected_at, dropi_timestamp, dropi_movement_id, source
+      ) VALUES ($1,$2,$3,$4,NULL,NULL,$5,$5,$6,'guide_movement')`,
+      [tenantId, orderId, prev?.estatusnuevoname ?? null, mov.estatusnuevoname, timestamp, mov.BitacoraGuiaId],
     )
     count++
   }
