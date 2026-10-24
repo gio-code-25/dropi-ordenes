@@ -178,6 +178,36 @@ Cada orden incluye:
 - `distribution_company`: transportadora con ID
 - `name` + `surname`: nombre completo del cliente (separados)
 
+#### Detalle de orden (descubierto oct 2026)
+```
+GET https://api.dropi.mx/api/orders/myorders/v2/{orderId}?warranty=false
+Headers: x-authorization: Bearer <JWT_TOKEN>
+Response: { isSuccess: true, objects: { ...orden, history: [...cambios_de_estatus] } }
+```
+`history[]` contiene TODOS los cambios de estatus (plataforma + transportadora) con timestamps.
+Es la fuente autoritativa para el timeline — equivale a "Historial de estados" en la UI de Dropi.
+Cada entry: `{ id, status, created_at, order_id, user_id, user: { id, name, surname }, notes }`
+
+#### Novedades / Incidencias (descubierto oct 2026)
+```
+GET https://api.dropi.mx/api/orders/myorders/v2
+  (mismo endpoint de ordenes, filtros especiales)
+Query params:
+  orderBy=id&orderDirection=desc
+  result_number=100&start=0
+  textToSearch=
+  status=EN PROCESAMIENTO
+  supplier_id=null
+  user_id={userId}
+  from_date_last_incidence=YYYY-MM-DD   // 30 dias atras
+  until_date_last_incidence=YYYY-MM-DD  // hoy
+  haveIncidenceProcesamiento=true
+  issue_solved_by_parent_order=false
+Response: { isSuccess: true, objects: [...ordenes_con_novedad] }
+```
+Devuelve ordenes con incidencias activas (direccion incorrecta, rechazo, etc.).
+Cuando `objects` esta vacio = no hay novedades. El worker hace check en cada poll y logea.
+
 #### Otros endpoints descubiertos
 ```
 GET  https://api.dropi.mx/api/helpers/getStatusesByCountry?country=  → 225 estatus

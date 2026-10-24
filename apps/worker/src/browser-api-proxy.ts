@@ -256,6 +256,52 @@ export class BrowserApiProxy {
     return parsed.data.objects.history
   }
 
+  async checkNovelties(): Promise<InternalOrder[]> {
+    const page = await this.ensureLoggedIn()
+
+    const now = new Date()
+    const from = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000)
+    const fromStr = from.toISOString().slice(0, 10)
+    const untilStr = now.toISOString().slice(0, 10)
+
+    const rawResult = await page.evaluate(
+      async (params: { from: string; until: string }) => {
+        const jwt = localStorage.getItem('DROPI_token')?.replace(/^"|"$/g, '')
+        if (!jwt) throw new Error('No JWT in localStorage')
+
+        const qs = new URLSearchParams({
+          orderBy: 'id',
+          orderDirection: 'desc',
+          result_number: '100',
+          start: '0',
+          textToSearch: '',
+          status: 'EN PROCESAMIENTO',
+          supplier_id: 'null',
+          user_id: 'null',
+          from_date_last_incidence: params.from,
+          until_date_last_incidence: params.until,
+          haveIncidenceProcesamiento: 'true',
+          issue_solved_by_parent_order: 'false',
+        })
+
+        const res = await fetch(`https://api.dropi.mx/api/orders/myorders/v2?${qs}`, {
+          headers: { 'x-authorization': `Bearer ${jwt}`, Accept: 'application/json' },
+        })
+        if (!res.ok) throw new Error(`API returned ${res.status}: ${await res.text()}`)
+        return res.json()
+      },
+      { from: fromStr, until: untilStr },
+    )
+
+    const parsed = InternalListResponseSchema.safeParse(rawResult)
+    if (!parsed.success) {
+      this.logger.error('Novelties schema validation failed', { errors: parsed.error.issues.slice(0, 5) })
+      return []
+    }
+
+    return parsed.data.objects
+  }
+
   async close(): Promise<void> {
     this.loggedIn = false
     this.page = null

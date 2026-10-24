@@ -51,6 +51,29 @@ async function runPollCycle(tenantId: string): Promise<void> {
     return
   }
 
+  // Check for novelties (incidences) — log only, no DB writes yet
+  try {
+    const novelties = await proxy.checkNovelties()
+    if (novelties.length > 0) {
+      logger.warn('NOVEDADES detectadas', {
+        count: novelties.length,
+        orders: novelties.map((n) => ({
+          id: n.id,
+          status: n.status,
+          customer: [n.name, n.surname].filter(Boolean).join(' '),
+          city: n.city,
+          guide: n.shipping_guide,
+        })),
+      })
+    } else {
+      logger.info('No novelties found')
+    }
+  } catch (err) {
+    logger.error('Failed to check novelties (best-effort)', {
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1)
   await db.query(
     `UPDATE poll_runs SET finished_at = now(), orders_read = $2, changes = $3, errors = $4 WHERE id = $1`,
